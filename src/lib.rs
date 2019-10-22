@@ -38,7 +38,6 @@
 //! ```
 #![warn(missing_docs)]
 #![doc(html_root_url = "https://docs.rs/r2d2/0.8")]
-#![cfg_attr(feature = "async", feature(async_await))]
 
 use log::error;
 

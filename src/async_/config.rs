@@ -1,8 +1,6 @@
 use futures::executor::ThreadPool;
 use futures::future::FutureObj;
 use futures::prelude::*;
-use futures::task::{Spawn, SpawnError};
-use futures_timer::TimerHandle;
 use std::fmt;
 use std::marker::PhantomData;
 use std::time::Duration;
@@ -25,8 +23,6 @@ where
     error_handler: Box<dyn HandleError<M::Error>>,
     connection_customizer: Box<dyn AsyncCustomizeConnection<M::Connection, M::Error>>,
     event_handler: Box<dyn HandleEvent>,
-    spawn: Option<Box<dyn SharedSpawn + Send + Sync>>,
-    timer: Option<TimerHandle>,
     reaper_rate: Duration,
     _p: PhantomData<M>,
 }
@@ -65,8 +61,6 @@ where
             error_handler: Box::new(LoggingErrorHandler),
             event_handler: Box::new(NopEventHandler),
             connection_customizer: Box::new(NopConnectionCustomizer),
-            spawn: None,
-            timer: None,
             reaper_rate: Duration::from_secs(30),
             _p: PhantomData,
         }
@@ -105,24 +99,6 @@ where
     /// Defaults to `None` (equivalent to the value of `max_size`).
     pub fn min_idle(mut self, min_idle: Option<u32>) -> AsyncBuilder<M> {
         self.min_idle = min_idle;
-        self
-    }
-
-    /// Sets the timer object used for asynchronous operations such as connection
-    /// creation.
-    ///
-    /// Defaults to a new pool with 3 threads.
-    pub fn spawn(mut self, spawn: Box<dyn SharedSpawn + Send + Sync>) -> AsyncBuilder<M> {
-        self.spawn = Some(spawn);
-        self
-    }
-
-    /// Sets the timer object used for asynchronous operations such as connection
-    /// creation.
-    ///
-    /// Defaults to the global timer.
-    pub fn timer(mut self, timer: TimerHandle) -> AsyncBuilder<M> {
-        self.timer = Some(timer);
         self
     }
 
@@ -263,16 +239,6 @@ where
             );
         }
 
-        let spawn = if let Some(spawn) = self.spawn {
-            spawn
-        } else {
-            let tp = ThreadPool::builder()
-                .pool_size(3)
-                .create()
-                .expect("Could not create thread pool");
-            Box::new(tp)
-        };
-
         let config = AsyncConfig {
             max_size: self.max_size,
             min_idle: self.min_idle,
@@ -283,8 +249,6 @@ where
             error_handler: self.error_handler,
             event_handler: self.event_handler,
             connection_customizer: self.connection_customizer,
-            spawn: spawn,
-            timer: self.timer,
         };
 
         AsyncPool::new_inner(config, manager, self.reaper_rate)
@@ -301,8 +265,6 @@ pub struct AsyncConfig<C, E> {
     pub error_handler: Box<dyn HandleError<E>>,
     pub event_handler: Box<dyn HandleEvent>,
     pub connection_customizer: Box<dyn AsyncCustomizeConnection<C, E>>,
-    pub spawn: Box<dyn SharedSpawn + Send + Sync>,
-    pub timer: Option<TimerHandle>,
 }
 
 // manual to avoid bounds on C and E
@@ -318,53 +280,6 @@ impl<C, E> fmt::Debug for AsyncConfig<C, E> {
             .field("error_handler", &self.error_handler)
             .field("event_handler", &self.event_handler)
             .field("connection_customizer", &self.connection_customizer)
-            .field("timer", &self.timer)
             .finish()
-    }
-}
-
-/// Essentially an alias of `&Spawn`.
-pub trait SharedSpawn {
-    fn spawn_obj(&self, future: FutureObj<'static, ()>) -> Result<(), SpawnError>;
-}
-
-impl<Sp> SharedSpawn for Sp
-where
-    Sp: ?Sized,
-    for<'a> &'a Sp: Spawn,
-{
-    fn spawn_obj(mut self: &Self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
-        Spawn::spawn_obj(&mut self, future)
-    }
-}
-
-impl<'a> Spawn for dyn SharedSpawn + 'a {
-    fn spawn_obj(&mut self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
-        <Self as SharedSpawn>::spawn_obj(self, future)
-    }
-}
-impl<'a> Spawn for &(dyn SharedSpawn + 'a) {
-    fn spawn_obj(&mut self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
-        <dyn SharedSpawn as SharedSpawn>::spawn_obj(*self, future)
-    }
-}
-impl<'a> Spawn for dyn SharedSpawn + Send + 'a {
-    fn spawn_obj(&mut self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
-        <Self as SharedSpawn>::spawn_obj(self, future)
-    }
-}
-impl<'a> Spawn for &(dyn SharedSpawn + Send + 'a) {
-    fn spawn_obj(&mut self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
-        <dyn SharedSpawn as SharedSpawn>::spawn_obj(*self, future)
-    }
-}
-impl<'a> Spawn for dyn SharedSpawn + Send + Sync + 'a {
-    fn spawn_obj(&mut self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
-        <Self as SharedSpawn>::spawn_obj(self, future)
-    }
-}
-impl<'a> Spawn for &(dyn SharedSpawn + Send + Sync + 'a) {
-    fn spawn_obj(&mut self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
-        <dyn SharedSpawn as SharedSpawn>::spawn_obj(*self, future)
     }
 }
