@@ -160,8 +160,9 @@ where
     async move {
         tokio::timer::Timeout::new_at(
             recv.map_err(|_| -> std::io::Error { panic!("cancel must not happen") }),
-            end
-        ).await?
+            end,
+        )
+        .await?
     }
 }
 
@@ -298,6 +299,15 @@ where
 pub struct AsyncPool<M>(Arc<SharedPool<M>>)
 where
     M: AsyncManageConnection;
+
+impl<M> AsRef<M> for AsyncPool<M>
+where
+    M: AsyncManageConnection,
+{
+    fn as_ref(&self) -> &M {
+        &self.0.manager
+    }
+}
 
 /// Returns a new `Pool` referencing the same state as `self`.
 impl<M> Clone for AsyncPool<M>
