@@ -161,7 +161,7 @@ where
         tokio::timer::Timeout::new_at(
             recv.map_err(|_| -> std::io::Error { panic!("cancel must not happen") }),
             end
-        ).await.expect("uh oh")
+        ).await?
     }
 }
 
