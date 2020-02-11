@@ -1,6 +1,5 @@
 use futures::future::BoxFuture;
 use futures::prelude::*;
-use futures_timer::Delay;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -79,7 +78,7 @@ impl AsyncManageConnection for NthConnectFailManager {
     }
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn test_max_size_ok() {
     let manager = NthConnectFailManager { n: Mutex::new(5) };
     let pool = AsyncPool::builder()
@@ -93,7 +92,7 @@ async fn test_max_size_ok() {
     }
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn test_acquire_release() {
     let pool = AsyncPool::builder()
         .max_size(2)
@@ -109,7 +108,7 @@ async fn test_acquire_release() {
     drop(conn3);
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn try_get() {
     let pool = AsyncPool::builder()
         .max_size(2)
@@ -130,7 +129,7 @@ async fn try_get() {
     assert!(pool.try_get().await.is_some());
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn get_timeout() {
     let pool = AsyncPool::builder()
         .max_size(1)
@@ -144,24 +143,24 @@ async fn get_timeout() {
 
     assert!(succeeds_immediately.is_ok());
 
-    let t1 = runtime::spawn(async move {
-        Delay::new(Duration::from_millis(50)).await.unwrap();
+    let t1 = tokio::spawn(async move {
+        tokio::time::delay_for(Duration::from_millis(50)).await;
         drop(succeeds_immediately);
     });
 
     let succeeds_delayed = pool.get_timeout(timeout).await;
     assert!(succeeds_delayed.is_ok());
 
-    let t2 = runtime::spawn(async move {
-        Delay::new(Duration::from_millis(150)).await.unwrap();
+    let t2 = tokio::spawn(async move {
+        tokio::time::delay_for(Duration::from_millis(150)).await;
         drop(succeeds_delayed);
     });
 
     let fails = pool.get_timeout(timeout).await;
     assert!(fails.is_err());
 
-    t1.await;
-    t2.await;
+    t1.await.unwrap();
+    t2.await.unwrap();
 }
 
 #[test]
@@ -170,7 +169,7 @@ fn test_is_send_sync() {
     is_send_sync::<AsyncPool<OkManager>>();
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn test_issue_2_unlocked_during_is_valid() {
     struct BlockingChecker {
         first: AtomicBool,
@@ -219,7 +218,7 @@ async fn test_issue_2_unlocked_during_is_valid() {
         .unwrap();
 
     let p2 = pool.clone();
-    let t = runtime::spawn(async move {
+    let t = tokio::spawn(async move {
         p2.get().await.ok().unwrap();
     });
 
@@ -228,10 +227,10 @@ async fn test_issue_2_unlocked_during_is_valid() {
     pool.get().await.ok().unwrap();
     s2.send(()).ok().unwrap();
 
-    t.await;
+    t.await.unwrap();
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn test_drop_on_broken() {
     static DROPPED: AtomicBool = AtomicBool::new(false);
     DROPPED.store(false, Ordering::SeqCst);
@@ -270,7 +269,7 @@ async fn test_drop_on_broken() {
     assert!(DROPPED.load(Ordering::SeqCst));
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn test_initialization_failure() {
     let manager = NthConnectFailManager { n: Mutex::new(0) };
     let err = AsyncPool::builder()
@@ -282,7 +281,7 @@ async fn test_initialization_failure() {
     assert!(err.to_string().contains("blammo"));
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn test_lazy_initialization_failure() {
     let manager = NthConnectFailManager { n: Mutex::new(0) };
     let pool = AsyncPool::builder()
@@ -292,7 +291,7 @@ async fn test_lazy_initialization_failure() {
     assert!(err.to_string().contains("blammo"));
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn test_get_global_timeout() {
     let pool = AsyncPool::builder()
         .max_size(1)
@@ -308,7 +307,7 @@ async fn test_get_global_timeout() {
     assert_eq!(started_waiting.elapsed().as_secs(), 1);
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn test_connection_customizer() {
     static RELEASED: AtomicBool = AtomicBool::new(false);
     RELEASED.store(false, Ordering::SeqCst);
@@ -379,7 +378,7 @@ async fn test_connection_customizer() {
     assert!(RELEASED.load(Ordering::SeqCst));
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn test_idle_timeout() {
     static DROPPED: AtomicUsize = AtomicUsize::new(0);
 
@@ -425,13 +424,13 @@ async fn test_idle_timeout() {
         .await
         .unwrap();
     let conn = pool.get().await.unwrap();
-    Delay::new(Duration::from_secs(2)).await.unwrap();
+    tokio::time::delay_for(Duration::from_secs(2)).await;
     assert_eq!(4, DROPPED.load(Ordering::SeqCst));
     drop(conn);
     assert_eq!(4, DROPPED.load(Ordering::SeqCst));
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn idle_timeout_partial_use() {
     static DROPPED: AtomicUsize = AtomicUsize::new(0);
 
@@ -477,14 +476,14 @@ async fn idle_timeout_partial_use() {
         .await
         .unwrap();
     for _ in 0..8 {
-        Delay::new(Duration::from_millis(250)).await.unwrap();
+        tokio::time::delay_for(Duration::from_millis(250)).await;
         pool.get().await.unwrap();
     }
     assert_eq!(4, DROPPED.load(Ordering::SeqCst));
     assert_eq!(1, pool.state().connections);
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn test_max_lifetime() {
     static DROPPED: AtomicUsize = AtomicUsize::new(0);
 
@@ -530,16 +529,16 @@ async fn test_max_lifetime() {
         .build(Handler(AtomicIsize::new(5)))
         .await
         .unwrap();
-    let conn = pool.get().await.unwrap();
-    Delay::new(Duration::from_secs(2)).await.unwrap();
+    let conn = pool.get().await;
+    tokio::time::delay_for(Duration::from_secs(2)).await;
     assert_eq!(4, DROPPED.load(Ordering::SeqCst));
     drop(conn);
-    Delay::new(Duration::from_secs(2)).await.unwrap();
+    tokio::time::delay_for(Duration::from_secs(2)).await;
     assert_eq!(5, DROPPED.load(Ordering::SeqCst));
     assert!(pool.get().await.is_err());
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn min_idle() {
     struct Connection;
 
@@ -568,14 +567,14 @@ async fn min_idle() {
         .build(Handler)
         .await
         .unwrap();
-    Delay::new(Duration::from_secs(1)).await.unwrap();
+    tokio::time::delay_for(Duration::from_secs(1)).await;
     assert_eq!(2, pool.state().idle_connections);
     assert_eq!(2, pool.state().connections);
     let conns = stream::iter(0..3)
         .then(|_| async { pool.get().await.unwrap() })
         .collect::<Vec<_>>()
         .await;
-    Delay::new(Duration::from_secs(1)).await.unwrap();
+    tokio::time::delay_for(Duration::from_secs(1)).await;
     assert_eq!(2, pool.state().idle_connections);
     assert_eq!(5, pool.state().connections);
     mem::drop(conns);
@@ -583,7 +582,7 @@ async fn min_idle() {
     assert_eq!(5, pool.state().connections);
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn conns_drop_on_pool_drop() {
     static DROPPED: AtomicUsize = AtomicUsize::new(0);
 
@@ -625,12 +624,12 @@ async fn conns_drop_on_pool_drop() {
         if DROPPED.load(Ordering::SeqCst) == 10 {
             return;
         }
-        Delay::new(Duration::from_secs(1)).await.unwrap();
+        tokio::time::delay_for(Duration::from_secs(1)).await;
     }
     panic!("timed out waiting for connections to drop");
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn events() {
     #[derive(Debug)]
     enum Event {
@@ -677,7 +676,7 @@ async fn events() {
         fn connect(&self) -> BoxFuture<'_, Result<TestConnection, Error>> {
             async move {
                 // Avoid acquisition-before-release flakiness
-                Delay::new(Duration::from_millis(10)).await.unwrap();
+                tokio::time::delay_for(Duration::from_millis(10)).await;
                 Ok(TestConnection)
             }
                 .boxed()
@@ -766,7 +765,7 @@ async fn events() {
     }
 }
 
-#[runtime::test]
+#[tokio::test]
 async fn extensions() {
     let pool = AsyncPool::builder()
         .max_size(2)

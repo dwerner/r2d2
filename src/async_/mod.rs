@@ -7,7 +7,8 @@ use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
-use std::time::{Duration, Instant};
+use std::time::{Duration};
+use tokio::time::Instant;
 
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
@@ -158,9 +159,9 @@ where
     internals.waiters.push_back(send);
     drop(internals);
     async move {
-        tokio::timer::Timeout::new_at(
-            recv.map_err(|_| -> std::io::Error { panic!("cancel must not happen") }),
+        tokio::time::timeout_at(
             end,
+            recv.map_err(|_| -> std::io::Error { panic!("cancel must not happen") }),
         )
         .await?
     }
@@ -215,7 +216,7 @@ where
     {
         let new_shared = Arc::downgrade(shared);
         tokio::spawn(async move {
-            tokio::timer::delay_for(delay).await;
+            tokio::time::delay_for(delay).await;
             let shared = match new_shared.upgrade() {
                 Some(shared) => shared,
                 None => return,
@@ -371,8 +372,9 @@ where
         if shared.config.max_lifetime.is_some() || shared.config.idle_timeout.is_some() {
             let s = Arc::downgrade(&shared);
             tokio::spawn(async move {
-                let mut interval = tokio::timer::Interval::new_interval(reaper_rate);
-                while let Some(_) = interval.next().await {
+                let mut interval = tokio::time::interval(reaper_rate);
+                loop {
+                    interval.tick().await;
                     reap_connections(&s);
                 }
             });

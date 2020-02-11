@@ -1,5 +1,3 @@
-use futures::executor::ThreadPool;
-use futures::future::FutureObj;
 use futures::prelude::*;
 use std::fmt;
 use std::marker::PhantomData;
